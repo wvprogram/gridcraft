@@ -11,6 +11,10 @@ Two backends:
 | Headless (default) | `gridcraft-cli mcp [--in book.xlsx \| --sample budget]` | An in-process engine session — no window. |
 | Remote | `gridcraft-cli mcp --connect 7979` | A running app started with `gridcraft --control 7979` (TCP JSON lines on `127.0.0.1`). |
 
+With `--connect`, the bridge sends the app's control key, which it reads from
+`GRIDCRAFT_CONTROL_KEY` or from the key file the app writes at start (see
+[Keys](control-protocol.md#keys)).
+
 ## Claude Code
 
 ```sh

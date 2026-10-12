@@ -9,6 +9,7 @@
 pub mod catalog;
 pub mod cf;
 pub mod cmd;
+pub mod control_key;
 pub mod display;
 pub mod fill;
 pub mod io;

@@ -42,7 +42,7 @@ People trust GridCraft with their numbers; a crash loses their work. **This outr
 
 ## Running and looking at the app
 - `cargo run --release -p gridcraft -- --sample sales --control 7979` (sample workbook + control channel).
-- Drive it: JSON lines on `127.0.0.1:7979`, e.g. `{"id":1,"method":"engine.execute","params":{"command":"cell.set","params":{"cell":"B2","input":"=SUM(A1:A9)"}}}` then `{"id":2,"method":"ui.screenshot","params":{"path":"/tmp/shot.png"}}`. Methods: `crates/ui-egui/src/control.rs`, docs: `docs/control-protocol.md`.
+- Drive it: `gridcraft-cli send 7979 engine.execute '{"command":"cell.set","params":{"cell":"B2","input":"=SUM(A1:A9)"}}'` then `gridcraft-cli send 7979 ui.screenshot '{"path":"/tmp/shot.png"}'`, or JSON lines on `127.0.0.1:7979` with the window's key (`{"id":1,"key":"…","method":…}`; the key is in the settings folder's `control-key.local-7979`, see `docs/control-protocol.md`, Keys). Methods: `crates/ui-egui/src/control.rs`, docs: `docs/control-protocol.md`.
 - **Offscreen UI render** (no window, from a source checkout): `cargo run -p gridcraft-ui-egui --example snapshot -- --sample sales out.png`.
 - Headless: `gridcraft-cli eval '=SUM(1,2,3)'`, `gridcraft-cli run --in book.xlsx --cmd 'home.bold={"range":"A1:C1"}' --out book.xlsx`, `gridcraft-cli mcp`.
 - **For UI work, look at the result** (snapshot PNG) and compare with `plan/excel/observed-ui.md`.
