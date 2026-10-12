@@ -150,3 +150,30 @@ fn mcp_over_stdio() {
     assert_eq!(lines[0]["result"]["serverInfo"]["name"], "gridcraft");
     assert!(lines[1]["result"]["content"][0]["text"].as_str().unwrap().contains("42"));
 }
+
+/// `mcp --root DIR` confines agents' files to DIR; a missing folder is an error at start-up.
+#[test]
+fn mcp_root_confines_agents_files() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-cli-root-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut child = bin().args(["mcp", "--root"]).arg(&dir).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().unwrap();
+    {
+        let stdin = child.stdin.as_mut().unwrap();
+        let call = |name: &str, args: &str, id: u32| {
+            format!(r#"{{"jsonrpc":"2.0","id":{id},"method":"tools/call","params":{{"name":"{name}","arguments":{args}}}}}"#)
+        };
+        writeln!(stdin, "{}", call("save_workbook", r#"{"path":"inside.xlsx"}"#, 1)).unwrap();
+        writeln!(stdin, "{}", call("save_workbook", r#"{"path":"../outside.xlsx"}"#, 2)).unwrap();
+    }
+    let out = child.wait_with_output().unwrap();
+    let text = String::from_utf8(out.stdout).unwrap();
+    let lines: Vec<serde_json::Value> = text.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert_eq!(lines[0]["result"]["isError"], false, "{text}");
+    assert!(dir.join("inside.xlsx").exists());
+    assert_eq!(lines[1]["result"]["isError"], true, "{text}");
+    assert!(!dir.parent().unwrap().join("outside.xlsx").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+    let bad = bin().args(["mcp", "--root", "/no/such/folder/for/gridcraft"]).stdin(Stdio::null()).output().unwrap();
+    assert!(!bad.status.success());
+    assert!(String::from_utf8_lossy(&bad.stderr).contains("--root"));
+}

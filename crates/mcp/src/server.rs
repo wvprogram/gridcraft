@@ -5,6 +5,7 @@ use std::io::{BufRead, Write};
 use serde_json::{Value, json};
 
 use crate::backend::Backend;
+use crate::paths::PathPolicy;
 use crate::tools::{call_tool, check_arguments, tool_definitions};
 
 /// The MCP revision we implement.
@@ -39,6 +40,8 @@ pub const FUNCTIONS_URI: &str = "gridcraft://functions";
 pub struct Server {
     backend: Box<dyn Backend>,
     initialized: bool,
+    /// The folder agents' file paths must stay inside.
+    paths: PathPolicy,
 }
 
 fn response(id: Value, result: Value) -> Value {
@@ -50,8 +53,14 @@ fn error(id: Value, code: i64, message: impl Into<String>) -> Value {
 }
 
 impl Server {
+    /// A server whose agents may use files in the current folder only (see [`Server::with_paths`]).
     pub fn new(backend: Box<dyn Backend>) -> Self {
-        Self { backend, initialized: false }
+        Self::with_paths(backend, PathPolicy::current_dir())
+    }
+
+    /// A server whose agents may use files inside `paths`' folder only.
+    pub fn with_paths(backend: Box<dyn Backend>, paths: PathPolicy) -> Self {
+        Self { backend, initialized: false, paths }
     }
 
     pub fn backend(&mut self) -> &mut dyn Backend {
@@ -168,7 +177,7 @@ impl Server {
                     Some(_) => return Err((INVALID_PARAMS, "tool `arguments` must be an object".to_string())),
                 };
                 check_arguments(name, &args).map_err(|e| (INVALID_PARAMS, e))?;
-                Ok(call_tool(self.backend.as_mut(), name, &args).to_value())
+                Ok(call_tool(self.backend.as_mut(), &self.paths, name, &args).to_value())
             }
             "resources/list" => Ok(json!({"resources": [
                 {"uri": WORKBOOK_URI, "name": "workbook", "title": "Active workbook", "description": "Sheets, used ranges, tables, charts, names, selection and undo history of the active workbook (document.inspect)", "mimeType": "application/json"},

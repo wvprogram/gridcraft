@@ -16,11 +16,13 @@
 
 mod backend;
 mod headless;
+pub mod paths;
 mod server;
 mod tools;
 
 pub use backend::{Backend, Remote};
 pub use headless::Headless;
+pub use paths::PathPolicy;
 pub use server::{COMMANDS_URI, FUNCTIONS_URI, PROTOCOL_VERSION, SUPPORTED_VERSIONS, Server, WORKBOOK_URI};
 pub use tools::{ToolResult, call_tool, tool_definitions};
 

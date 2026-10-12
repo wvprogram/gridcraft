@@ -5,6 +5,7 @@ use serde_json::{Map, Value, json};
 
 use crate::backend::Backend;
 use crate::headless::NO_UI;
+use crate::paths::PathPolicy;
 
 /// The result of `tools/call`: MCP content blocks plus the `isError` flag.
 #[derive(Clone, Debug, PartialEq)]
@@ -433,7 +434,10 @@ fn req_str<'a>(a: &'a Args, k: &str) -> Result<&'a str, String> {
     a.get(k).and_then(Value::as_str).ok_or_else(|| format!("missing string argument `{k}`"))
 }
 
-fn exec(b: &mut dyn Backend, cmd: &str, params: Value) -> Result<Value, String> {
+/// Runs a command for the agent. Every `"path"` in its parameters must be inside the server's
+/// folder (see [`PathPolicy`]) and is passed on as an absolute path.
+fn exec(b: &mut dyn Backend, paths: &PathPolicy, cmd: &str, params: Value) -> Result<Value, String> {
+    let params = paths.confine(params)?;
     b.call("engine.execute", json!({"command": cmd, "params": params}))
 }
 
@@ -442,7 +446,7 @@ fn pick(a: &Args, keys: &[&str]) -> Value {
     Value::Object(keys.iter().filter_map(|k| a.get(*k).filter(|v| !v.is_null()).map(|v| (k.to_string(), v.clone()))).collect())
 }
 
-fn format_range(b: &mut dyn Backend, a: &Args) -> Result<Value, String> {
+fn format_range(b: &mut dyn Backend, paths: &PathPolicy, a: &Args) -> Result<Value, String> {
     let range = req_str(a, "range")?;
     let mut steps: Vec<(&str, Value)> = Vec::new();
     let r = json!(range);
@@ -498,13 +502,13 @@ fn format_range(b: &mut dyn Backend, a: &Args) -> Result<Value, String> {
     }
     let mut applied = Vec::new();
     for (id, p) in steps {
-        exec(b, id, p).map_err(|e| format!("{id}: {e} (applied before the failure: {applied:?})"))?;
+        exec(b, paths, id, p).map_err(|e| format!("{id}: {e} (applied before the failure: {applied:?})"))?;
         applied.push(id);
     }
     Ok(json!({"range": range, "applied": applied}))
 }
 
-fn sort_range(b: &mut dyn Backend, a: &Args) -> Result<Value, String> {
+fn sort_range(b: &mut dyn Backend, paths: &PathPolicy, a: &Args) -> Result<Value, String> {
     let keys = a.get("keys").and_then(Value::as_array).ok_or("`keys` must be an array")?;
     if keys.is_empty() {
         return Err("`keys` needs at least one sort level".into());
@@ -532,34 +536,34 @@ fn sort_range(b: &mut dyn Backend, a: &Args) -> Result<Value, String> {
     }
     let mut p = pick(a, &["range", "header"]);
     p["keys"] = Value::Array(norm);
-    exec(b, "data.sort", p)
+    exec(b, paths, "data.sort", p)
 }
 
-fn filter(b: &mut dyn Backend, a: &Args) -> Result<Value, String> {
+fn filter(b: &mut dyn Backend, paths: &PathPolicy, a: &Args) -> Result<Value, String> {
     if let Some(r) = a.get("range").and_then(Value::as_str) {
-        exec(b, "selection.set", json!({"range": r}))?;
+        exec(b, paths, "selection.set", json!({"range": r}))?;
     }
-    exec(b, "data.filterBy", pick(a, &["column", "values", "custom", "top", "blanks", "clear"]))
+    exec(b, paths, "data.filterBy", pick(a, &["column", "values", "custom", "top", "blanks", "clear"]))
 }
 
-fn save_workbook(b: &mut dyn Backend, a: &Args) -> Result<Value, String> {
+fn save_workbook(b: &mut dyn Backend, paths: &PathPolicy, a: &Args) -> Result<Value, String> {
     if a.get("path").and_then(Value::as_str).is_none() {
         let info = b.call("document.inspect", json!({}))?;
         if info.get("path").is_none_or(Value::is_null) {
             return Err("this workbook has never been saved: pass `path` (e.g. \"/tmp/book.xlsx\")".into());
         }
     }
-    exec(b, "file.save", pick(a, &["path"]))
+    exec(b, paths, "file.save", pick(a, &["path"]))
 }
 
-fn screenshot(b: &mut dyn Backend, a: &Args) -> Result<Value, String> {
+fn screenshot(b: &mut dyn Backend, paths: &PathPolicy, a: &Args) -> Result<Value, String> {
     if !b.has_ui() {
         return Err(NO_UI.into());
     }
-    b.call("ui.screenshot", json!({"path": req_str(a, "path")?}))
+    b.call("ui.screenshot", paths.confine(json!({"path": req_str(a, "path")?}))?)
 }
 
-fn dispatch(b: &mut dyn Backend, name: &str, a: &Args) -> Result<Value, String> {
+fn dispatch(b: &mut dyn Backend, paths: &PathPolicy, name: &str, a: &Args) -> Result<Value, String> {
     match name {
         "execute_command" => {
             let cmd = req_str(a, "command")?;
@@ -568,48 +572,48 @@ fn dispatch(b: &mut dyn Backend, name: &str, a: &Args) -> Result<Value, String> 
                 Some(v @ Value::Object(_)) => v.clone(),
                 Some(_) => return Err("`params` must be an object".into()),
             };
-            exec(b, cmd, p)
+            exec(b, paths, cmd, p)
         }
         "list_commands" => b.call("engine.commands", pick(a, &["search"])),
         "inspect_workbook" => b.call("document.inspect", json!({})),
         "read_range" => b.call("sheet.read", pick(a, &["range", "sheet", "formulas", "formatted"])),
-        "write_range" => exec(b, "range.setValues", pick(a, &["range", "values"])),
-        "set_cell" => exec(b, "cell.set", pick(a, &["cell", "input"])),
-        "get_cell" => exec(b, "cell.get", pick(a, &["cell"])),
+        "write_range" => exec(b, paths, "range.setValues", pick(a, &["range", "values"])),
+        "set_cell" => exec(b, paths, "cell.set", pick(a, &["cell", "input"])),
+        "get_cell" => exec(b, paths, "cell.get", pick(a, &["cell"])),
         "evaluate_formula" => {
             let f = req_str(a, "formula")?;
             let formula = if f.starts_with('=') { f.to_string() } else { format!("={f}") };
             let mut p = pick(a, &["cell"]);
             p["formula"] = json!(formula);
-            let v = exec(b, "formulas.evaluate", p)?;
+            let v = exec(b, paths, "formulas.evaluate", p)?;
             Ok(json!({"formula": formula, "result": v}))
         }
-        "select" => exec(b, "selection.set", pick(a, &["range", "active"])),
-        "format_range" => format_range(b, a),
-        "insert_chart" => exec(b, "insert.chart", pick(a, &["range", "type", "subtype", "title", "at"])),
-        "create_table" => exec(b, "insert.table", pick(a, &["range", "style", "header", "name"])),
-        "sort_range" => sort_range(b, a),
-        "filter" => filter(b, a),
-        "open_workbook" => exec(b, "file.open", pick(a, &["path"])),
-        "save_workbook" => save_workbook(b, a),
-        "new_workbook" => exec(b, "file.new", pick(a, &["sample"])),
-        "undo" => exec(b, "edit.undo", pick(a, &["steps"])),
-        "redo" => exec(b, "edit.redo", pick(a, &["steps"])),
-        "screenshot" => screenshot(b, a),
-        "list_functions" => exec(b, "formulas.functions", pick(a, &["search", "category"])),
+        "select" => exec(b, paths, "selection.set", pick(a, &["range", "active"])),
+        "format_range" => format_range(b, paths, a),
+        "insert_chart" => exec(b, paths, "insert.chart", pick(a, &["range", "type", "subtype", "title", "at"])),
+        "create_table" => exec(b, paths, "insert.table", pick(a, &["range", "style", "header", "name"])),
+        "sort_range" => sort_range(b, paths, a),
+        "filter" => filter(b, paths, a),
+        "open_workbook" => exec(b, paths, "file.open", pick(a, &["path"])),
+        "save_workbook" => save_workbook(b, paths, a),
+        "new_workbook" => exec(b, paths, "file.new", pick(a, &["sample"])),
+        "undo" => exec(b, paths, "edit.undo", pick(a, &["steps"])),
+        "redo" => exec(b, paths, "edit.redo", pick(a, &["steps"])),
+        "screenshot" => screenshot(b, paths, a),
+        "list_functions" => exec(b, paths, "formulas.functions", pick(a, &["search", "category"])),
         other => Err(format!("unknown tool `{other}`")),
     }
 }
 
 /// Runs one tool. Failures become `isError` results with a readable message.
-pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> ToolResult {
+pub fn call_tool(b: &mut dyn Backend, paths: &PathPolicy, name: &str, args: &Value) -> ToolResult {
     let empty = Map::new();
     let a = match args {
         Value::Object(o) => o,
         Value::Null => &empty,
         _ => return ToolResult::error("tool arguments must be a JSON object"),
     };
-    match dispatch(b, name, a) {
+    match dispatch(b, paths, name, a) {
         Ok(v) => ToolResult::json(&v),
         Err(e) => ToolResult::error(format!("{name}: {e}")),
     }
