@@ -5,6 +5,7 @@
 
 pub mod addr;
 pub mod date;
+pub mod link;
 pub mod parse;
 pub mod value;
 

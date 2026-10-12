@@ -7,7 +7,8 @@ use serde_json::{Value, json};
 use crate::{Backend, Headless, PROTOCOL_VERSION, Remote, Server, control_addr, tool_definitions};
 
 fn server() -> Server {
-    Server::new(Box::new(Headless::new()))
+    // Tests save under the temporary folder (`tmp`).
+    Server::with_paths(Box::new(Headless::new()), crate::PathPolicy::within(&std::env::temp_dir()).unwrap())
 }
 
 fn rpc(s: &mut Server, id: u64, method: &str, params: Value) -> Value {
@@ -391,4 +392,45 @@ fn file_commands_without_a_file_fail() {
         assert!(msg.contains("missing") && msg.contains("never open dialogs"), "{command}: {msg}");
         fails(&mut s, "execute_command", json!({"command": command, "params": {}}));
     }
+}
+
+/// An agent steered by a hostile workbook must not read or overwrite files outside the server's
+/// folder: through `open_workbook`, `save_workbook`, `screenshot` or any command run with
+/// `execute_command`. Before `--root`, `file.open` read any CSV, text or JSON file into a sheet
+/// for the agent to read back, and `file.exportCsv` / `file.exportHtml` overwrote any file.
+#[test]
+fn agents_cannot_reach_files_outside_the_root() {
+    let base = std::env::temp_dir().join(format!("gridcraft-mcp-root-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let (root, private) = (base.join("work"), base.join("private"));
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&private).unwrap();
+    let secret = private.join("passwords.csv");
+    std::fs::write(&secret, "bank pin,4321\n").unwrap();
+    let notes = private.join("notes.html");
+    std::fs::write(&notes, "my notes").unwrap();
+    let mut s = Server::with_paths(Box::new(Headless::new()), crate::PathPolicy::within(&root).unwrap());
+    let (secret_s, notes_s) = (secret.to_string_lossy().to_string(), notes.to_string_lossy().to_string());
+    let outside = |s: &mut Server, name: &str, args: Value| {
+        let m = fails(s, name, args.clone());
+        assert!(m.contains("outside"), "{name} {args}: {m}");
+    };
+    outside(&mut s, "open_workbook", json!({"path": secret_s}));
+    outside(&mut s, "open_workbook", json!({"path": "../private/passwords.csv"}));
+    outside(&mut s, "save_workbook", json!({"path": notes_s}));
+    outside(&mut s, "execute_command", json!({"command": "file.exportHtml", "params": {"path": notes_s}}));
+    outside(&mut s, "execute_command", json!({"command": "file.exportCsv", "params": {"path": "../private/notes.html"}}));
+    outside(&mut s, "execute_command", json!({"command": "file.open", "params": {"path": secret_s}}));
+    outside(&mut s, "execute_command", json!({"command": "insert.picture", "params": {"path": secret_s}}));
+    let read = ok(&mut s, "read_range", json!({"range": "A1:B2"}));
+    assert!(!read.to_string().contains("4321"), "the secret was not read: {read}");
+    assert_eq!(std::fs::read_to_string(&notes).unwrap(), "my notes", "the file outside was not overwritten");
+
+    // Inside the folder everything works, with relative paths too.
+    ok(&mut s, "set_cell", json!({"cell": "A1", "input": "inside"}));
+    ok(&mut s, "save_workbook", json!({"path": "book.xlsx"}));
+    assert!(root.join("book.xlsx").exists());
+    ok(&mut s, "open_workbook", json!({"path": "book.xlsx"}));
+    assert!(ok(&mut s, "read_range", json!({"range": "A1"})).to_string().contains("inside"));
+    let _ = std::fs::remove_dir_all(&base);
 }

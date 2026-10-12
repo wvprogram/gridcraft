@@ -1608,17 +1608,26 @@ fn object_anchor(sh: &Sheet, kind: &str, id: u32) -> Option<gridcraft_engine::mo
     }
 }
 
+/// Follows a cell's hyperlink: a place in the workbook, or a web or email link. Anything else a
+/// workbook links to (`file:` paths to programs, network shares, custom protocol handlers) is
+/// not handed to the operating system: a received workbook could otherwise launch it on a click.
 pub fn follow_link(app: &mut SheetApp, target: &str) {
-    if target.contains("://") || target.starts_with("mailto:") {
+    if gridcraft_engine::core::link::is_followable_link(target) {
         if let Some(f) = &app.services.open_url {
             f(target);
         }
-    } else {
-        let t = target.trim_start_matches('#');
-        let _ = app.session.run("edit.goTo", json!({"reference": t}));
+        return;
+    }
+    let t = target.trim_start_matches('#');
+    if app.session.run("edit.goTo", json!({"reference": t})).is_ok() {
         app.grid.ensure_visible = true;
+    } else {
+        app.toast = Some((BLOCKED_LINK.to_string(), crate::now_ms()));
     }
 }
+
+/// Shown when a link is neither a place in the workbook nor a web or email link.
+pub const BLOCKED_LINK: &str = "This link wasn't opened: only web (http, https) and email links open from a workbook.";
 
 fn select_ranges(app: &mut SheetApp, r: RangeRef, add: bool, active: CellRef) {
     let mut ranges: Vec<String> =

@@ -1259,6 +1259,11 @@ pub fn zip2(a: &Value, b: &Value, f: impl Fn(&Value, &Value) -> Value) -> Value 
         (Value::Array(x), Value::Array(y)) => {
             let rows = broadcast_dim(x.rows, y.rows);
             let cols = broadcast_dim(x.cols, y.cols);
+            // A column times a row broadcasts to their product: `SEQUENCE(1048576)&SEQUENCE(1,16384)`
+            // asked for 412 GB and aborted the app. Same limit as every other array.
+            if exceeds_max_cells(rows, cols) {
+                return Value::Error(CellError::Num);
+            }
             let mut data = Vec::with_capacity(rows * cols);
             for r in 0..rows {
                 for c in 0..cols {
@@ -1271,6 +1276,11 @@ pub fn zip2(a: &Value, b: &Value, f: impl Fn(&Value, &Value) -> Value) -> Value 
         (s, Value::Array(y)) => Value::from(Array { rows: y.rows, cols: y.cols, data: y.data.iter().map(|v| f(s, v)).collect() }),
         (x, y) => f(x, y),
     }
+}
+
+/// Whether a `rows` × `cols` array is over [`MAX_CELLS`] (or its size overflows).
+fn exceeds_max_cells(rows: usize, cols: usize) -> bool {
+    rows.checked_mul(cols).is_none_or(|n| n as u64 > MAX_CELLS)
 }
 
 fn broadcast_dim(a: usize, b: usize) -> usize {
@@ -1289,6 +1299,9 @@ fn zip3(c: &Array, t: &Value, f: &Value, g: impl Fn(&Value, &Value, &Value) -> V
     let (fr, fc) = dims(f);
     let rows = broadcast_dim(broadcast_dim(c.rows, tr), fr);
     let cols = broadcast_dim(broadcast_dim(c.cols, tc), fc);
+    if exceeds_max_cells(rows, cols) {
+        return Value::Error(CellError::Num);
+    }
     let get = |v: &Value, r: usize, col: usize| if let Value::Array(a) = v { a.get_broadcast(r, col) } else { v.clone() };
     let mut data = Vec::with_capacity(rows * cols);
     for r in 0..rows {

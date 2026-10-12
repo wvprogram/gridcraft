@@ -51,21 +51,19 @@ impl eframe::App for App {
     }
     fn on_exit(&mut self) {
         save_prefs(&self.0);
+        if let Some(f) = CONTROL_KEY_FILE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take() {
+            f.remove();
+        }
     }
 }
 
 fn config_dir() -> Option<std::path::PathBuf> {
-    if cfg!(target_os = "macos") {
-        std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join("Library/Application Support/GridCraft"))
-    } else if cfg!(windows) {
-        std::env::var_os("APPDATA").map(|a| std::path::PathBuf::from(a).join("GridCraft"))
-    } else {
-        std::env::var_os("XDG_CONFIG_HOME")
-            .map(std::path::PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config")))
-            .map(|c| c.join("gridcraft"))
-    }
+    // One rule with the control channel's clients, which read the key file from here.
+    gridcraft_engine::control_key::settings_dir()
 }
+
+/// The control channel's key file, removed when the window closes.
+static CONTROL_KEY_FILE: std::sync::Mutex<Option<control_server::KeyFile>> = std::sync::Mutex::new(None);
 
 /// Runs without preferences (`GRIDCRAFT_NO_PREFS`, agents' test runs) neither read nor write
 /// them, and keep no log file.
@@ -151,6 +149,12 @@ fn services() -> Services {
                 .and_then(|p| p.to_str().map(str::to_string))
         })),
         open_url: Some(Box::new(|url: &str| {
+            // The last check before the operating system: `explorer`, `open` and `xdg-open`
+            // launch programs, shares and protocol handlers as readily as web pages.
+            if !gridcraft_engine::core::link::is_followable_link(url) {
+                log::warn!("not opening a link that isn't a web or email address: {url:?}");
+                return;
+            }
             let cmd = if cfg!(target_os = "macos") {
                 "open"
             } else if cfg!(windows) {
@@ -279,8 +283,11 @@ fn main() -> eframe::Result<()> {
         Box::new(move |cc| {
             SheetApp::setup_context_for_language(&cc.egui_ctx, app.ui.dark, app.ui.language);
             if let Some(port) = control_port {
-                match control_server::start(port, cc.egui_ctx.clone()) {
-                    Ok(rx) => app.control_rx = Some(rx),
+                match control_server::start(port, cc.egui_ctx.clone(), config_dir().as_deref()) {
+                    Ok((rx, key_file)) => {
+                        app.control_rx = Some(rx);
+                        *CONTROL_KEY_FILE.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = key_file;
+                    }
                     Err(e) => log::error!("control channel on port {port}: {e}"),
                 }
             }

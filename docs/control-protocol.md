@@ -6,14 +6,36 @@ Start the desktop app with a control port:
 gridcraft --control 7979            # or GRIDCRAFT_CONTROL_PORT=7979
 ```
 
-Then send newline-delimited JSON to `127.0.0.1:7979`. Every request line gets one reply line:
+Then send newline-delimited JSON to `127.0.0.1:7979`, each request with the window's key (see
+[Keys](#keys)). Every request line gets one reply line:
 
 ```json
-{"id": 1, "method": "engine.execute", "params": {"command": "cell.set", "params": {"cell": "B2", "input": "=SUM(A1:A9)"}}}
+{"id": 1, "key": "…", "method": "engine.execute", "params": {"command": "cell.set", "params": {"cell": "B2", "input": "=SUM(A1:A9)"}}}
 {"id": 1, "ok": true, "result": {"cell": "B2", "value": "45"}}
 ```
 
 Errors come back as `{"id": …, "ok": false, "error": "…"}`.
+
+## Keys
+
+The channel runs any command, including opening and saving files, so it only obeys whoever can
+read the window's key. When the port is bound, the app writes 64 random hex characters to
+`control-key.local-<port>` in its settings folder and removes the file when the window closes:
+
+| System | Key file for port 7979 |
+|---|---|
+| macOS | `~/Library/Application Support/GridCraft/control-key.local-7979` |
+| Windows | `%APPDATA%\GridCraft\control-key.local-7979` |
+| Linux, BSD | `$XDG_CONFIG_HOME/gridcraft/control-key.local-7979` (or `~/.config/gridcraft/…`) |
+
+On Unix the file is readable by the user only. Every request carries the key as `"key"`. A request
+without it, or with a wrong one, gets `{"ok": false, "error": "unauthorized: …"}` and the
+connection closes, so other programs, other users of the machine and web pages posting to the
+port can't drive the app. Request lines are limited to 64 MiB.
+
+`gridcraft-cli send` and `gridcraft-cli mcp --connect` find the key themselves: from
+`GRIDCRAFT_CONTROL_KEY` if set, else from the key file for the port. They send it only to
+loopback addresses.
 
 ## Methods
 

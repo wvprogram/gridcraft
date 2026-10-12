@@ -8,7 +8,7 @@
 //! gridcraft-cli run [--in FILE | --sample NAME] [--cmd 'id={json}']... [--script FILE.jsonl] [--out FILE] [--print RANGE] [--quiet]
 //! gridcraft-cli commands [--json] [--search X]
 //! gridcraft-cli functions [--json] [--search X] [--category C]
-//! gridcraft-cli mcp [--connect PORT] [--in FILE | --sample NAME]
+//! gridcraft-cli mcp [--connect PORT] [--in FILE | --sample NAME] [--root DIR]
 //! gridcraft-cli send <port> <method> [json]
 //! gridcraft-cli version | --version
 //! ```
@@ -40,7 +40,8 @@ const USAGE: &str = "usage:
                      [--out FILE] [--print RANGE] [--quiet]
   gridcraft-cli commands [--json] [--search X]
   gridcraft-cli functions [--json] [--search X] [--category C]
-  gridcraft-cli mcp [--connect PORT] [--in FILE | --sample NAME]
+  gridcraft-cli mcp [--connect PORT] [--in FILE | --sample NAME] [--root DIR]
+                   (agents may only open and save files inside --root; default: the current folder)
   gridcraft-cli send <port> <method> [json]
   gridcraft-cli version";
 
@@ -489,8 +490,8 @@ fn functions(args: &[String]) -> Result<(), String> {
 /// `mcp` (headless, in-process engine) or `mcp --connect PORT|HOST:PORT` (drive a running app
 /// started with `gridcraft --control PORT`). JSON-RPC on stdin/stdout; logs on stderr.
 fn mcp(args: &[String]) -> Result<(), String> {
-    use gridcraft_mcp::{Backend, Headless, Remote, Server, control_addr};
-    let a = Args::parse(args, &["connect", "in", "sample"], &[])?;
+    use gridcraft_mcp::{Backend, Headless, PathPolicy, Remote, Server, control_addr};
+    let a = Args::parse(args, &["connect", "in", "sample", "root"], &[])?;
     a.no_extra(0)?;
     let backend: Box<dyn Backend> = match a.opt("connect") {
         Some(c) => {
@@ -513,10 +514,19 @@ fn mcp(args: &[String]) -> Result<(), String> {
             Box::new(Headless::with_session(session))
         }
     };
+    // Agents' file paths stay inside one folder: a workbook the agent reads may try to steer it
+    // into opening or overwriting other files.
+    let paths = match a.opt("root") {
+        Some(dir) => PathPolicy::within(std::path::Path::new(dir))?,
+        None => PathPolicy::current_dir(),
+    };
     eprintln!("gridcraft-cli: MCP server on stdio ({})", backend.describe());
+    if let Some(root) = paths.root() {
+        eprintln!("gridcraft-cli: agents may use files in {}", root.display());
+    }
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
-    Server::new(backend).serve(stdin.lock(), stdout.lock()).map_err(|e| e.to_string())
+    Server::with_paths(backend, paths).serve(stdin.lock(), stdout.lock()).map_err(|e| e.to_string())
 }
 
 /// `send PORT METHOD [JSON]`: one control-channel request to a running app.
