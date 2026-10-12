@@ -467,3 +467,28 @@ fn sumif_resized_sum_range_on_another_sheet_and_through_a_name() {
     assert_eq!(t.num("C1"), 10.0);
     assert_eq!(t.num("C2"), 5.0);
 }
+
+/// Broadcasting a column against a row (operators, and IF over arrays) builds their product.
+/// `SEQUENCE(1048576)&SEQUENCE(1,16384)` asked for 412 GB and aborted the whole app (an
+/// allocation failure is not a catchable panic), on typing it or opening a file holding it.
+/// Arrays over `MAX_CELLS` are `#NUM!`, like every other array that big.
+#[test]
+fn broadcasting_to_a_huge_array_is_an_error_not_an_abort() {
+    let mut t = T::new();
+    for (at, f) in [
+        ("A1", "=ROWS(SEQUENCE(1048576)&SEQUENCE(1,16384))"),
+        ("A2", "=SUM(SEQUENCE(1048576)*SEQUENCE(1,16384))"),
+        ("A3", "=ROWS(SEQUENCE(1048576)=SEQUENCE(1,16384))"),
+        ("A4", "=ROWS(IF(SEQUENCE(1048576)>0,SEQUENCE(1,16384),0))"),
+    ] {
+        t.set(at, f);
+        assert_eq!(t.get(at), Value::Error(CellError::Num), "{f}");
+    }
+    // Ordinary broadcasting is unchanged.
+    t.set("B1", "=SUM(SEQUENCE(3)*SEQUENCE(1,4))");
+    assert_eq!(t.num("B1"), 60.0);
+    t.set("B2", "=ROWS(SEQUENCE(1000)&SEQUENCE(1,1000))");
+    assert_eq!(t.num("B2"), 1000.0, "a million-cell broadcast is fine");
+    t.set("B3", "=COLUMNS(IF(SEQUENCE(2)>1,SEQUENCE(1,3),0))");
+    assert_eq!(t.num("B3"), 3.0);
+}
