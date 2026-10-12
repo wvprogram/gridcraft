@@ -151,6 +151,12 @@ fn services() -> Services {
                 .and_then(|p| p.to_str().map(str::to_string))
         })),
         open_url: Some(Box::new(|url: &str| {
+            // The last check before the operating system: `explorer`, `open` and `xdg-open`
+            // launch programs, shares and protocol handlers as readily as web pages.
+            if !gridcraft_engine::core::link::is_followable_link(url) {
+                log::warn!("not opening a link that isn't a web or email address: {url:?}");
+                return;
+            }
             let cmd = if cfg!(target_os = "macos") {
                 "open"
             } else if cfg!(windows) {
